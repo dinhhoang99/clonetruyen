@@ -5,6 +5,37 @@ import {
   COUNTRIES, STATUSES, CHAPTER_COUNTS, SORT_OPTIONS, GENRES, toImgProxy
 } from './api';
 
+// Router tĩnh (History API) + cache để trở về không gọi lại API.
+const buildUrl = ({ tab = 'popular', page = 1, mangaUrl, chapterUrl }) => {
+  const params = new URLSearchParams();
+  params.set('tab', tab);
+  params.set('page', page.toString());
+  if (mangaUrl) params.set('manga', mangaUrl);
+  if (chapterUrl) params.set('chapter', chapterUrl);
+  const query = params.toString();
+  return query ? `?${query}` : '/';
+};
+
+const parseInitialRoute = () => {
+  const qs = new URLSearchParams(window.location.search);
+  return {
+    tab: qs.get('tab') || 'popular',
+    page: Number(qs.get('page') || '1'),
+    mangaUrl: qs.get('manga') || qs.get('url') || null,
+    chapterUrl: qs.get('chapter') || null,
+  };
+};
+
+const pageDataCache = {
+  popular: new Map(),
+  latest: new Map(),
+  search: new Map(),
+};
+const mangaDetailCache = new Map();
+const chapterImageCache = new Map();
+
+
+
 // ===== SKELETON CARD =====
 const SkeletonCard = () => (
   <div className="skeleton-card">
@@ -58,10 +89,19 @@ const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect }) => {
       setError(null);
       setImages([]);
 
+      const cacheKey = chapterInfo.url;
+      if (chapterImageCache.has(cacheKey)) {
+        setImages(chapterImageCache.get(cacheKey));
+        setLoading(false);
+        return;
+      }
+
       try {
         const res = await getChapterImages(chapterInfo.url);
         if (!active) return;
-        setImages(res.images || []);
+        const imgs = res.images || [];
+        chapterImageCache.set(cacheKey, imgs);
+        setImages(imgs);
       } catch (e) {
         if (!active) return;
         setError(e.message);
@@ -163,6 +203,13 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
+    const cacheKey = manga.url;
+    if (mangaDetailCache.has(cacheKey)) {
+      setDetail(mangaDetailCache.get(cacheKey));
+      setLoading(false);
+      return;
+    }
+
     const loadMangaDetail = async () => {
       setLoading(true);
       setError(null);
@@ -172,6 +219,7 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
         const detailData = await getMangaDetails(manga.url);
         if (!active) return;
         setDetail(detailData);
+        mangaDetailCache.set(cacheKey, detailData);
       } catch (e) {
         if (!active) return;
         setError(e.message);
@@ -344,14 +392,19 @@ const GenrePicker = ({ genreStates, onToggle }) => (
 
 // ===== MAIN APP =====
 export default function App() {
-  const [tab, setTab] = useState('popular'); // popular | latest | search
-  const [page, setPage] = useState(1);
+  const initialRoute = parseInitialRoute();
+  const [tab, setTab] = useState(initialRoute.tab); // popular | latest | search
+  const [page, setPage] = useState(initialRoute.page);
   const [manga, setManga] = useState([]);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedManga, setSelectedManga] = useState(null);
-  const [selectedChapter, setSelectedChapter] = useState(null);
+  const [selectedManga, setSelectedManga] = useState(
+    initialRoute.mangaUrl ? { url: decodeURIComponent(initialRoute.mangaUrl), title: '', thumbnail_url: '' } : null
+  );
+  const [selectedChapter, setSelectedChapter] = useState(
+    initialRoute.chapterUrl ? { url: decodeURIComponent(initialRoute.chapterUrl), name: '', mangaTitle: '', allChapters: [] } : null
+  );
   const [source, setSource] = useState('truyenqq');
 
   // Search/filter state
@@ -364,6 +417,74 @@ export default function App() {
   const [searchSuggestions, setSearchSuggestions] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const syncHistoryState = () => {
+    const state = {
+      tab,
+      page,
+      selectedManga,
+      selectedChapter,
+      searchQuery,
+      activeQuery,
+      showFilters,
+      filters,
+      activeFilters,
+      genreStates,
+    };
+    const url = buildUrl({
+      tab,
+      page,
+      mangaUrl: selectedManga?.url ? encodeURIComponent(selectedManga.url) : undefined,
+      chapterUrl: selectedChapter?.url ? encodeURIComponent(selectedChapter.url) : undefined,
+    });
+    window.history.replaceState(state, '', url);
+  };
+
+  const pushHistoryState = (nextState = {}) => {
+    const state = {
+      tab,
+      page,
+      selectedManga,
+      selectedChapter,
+      searchQuery,
+      activeQuery,
+      showFilters,
+      filters,
+      activeFilters,
+      genreStates,
+      ...nextState,
+    };
+    const url = buildUrl({
+      tab: state.tab,
+      page: state.page,
+      mangaUrl: state.selectedManga?.url ? encodeURIComponent(state.selectedManga.url) : undefined,
+      chapterUrl: state.selectedChapter?.url ? encodeURIComponent(state.selectedChapter.url) : undefined,
+    });
+    window.history.pushState(state, '', url);
+  };
+
+  useEffect(() => {
+    const onPopState = (event) => {
+      const state = event.state;
+      if (!state) return;
+      setTab(state.tab || 'popular');
+      setPage(state.page || 1);
+      setSearchQuery(state.searchQuery || '');
+      setActiveQuery(state.activeQuery || '');
+      setShowFilters(state.showFilters || false);
+      setFilters(state.filters || { country: '0', status: '-1', minchapter: '0', sort: '4' });
+      setActiveFilters(state.activeFilters || { country: '0', status: '-1', minchapter: '0', sort: '4' });
+      setGenreStates(state.genreStates || {});
+      setSelectedManga(state.selectedManga || null);
+      setSelectedChapter(state.selectedChapter || null);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    syncHistoryState();
+  }, [tab, page, selectedManga, selectedChapter, searchQuery, activeQuery, showFilters, filters, activeFilters, genreStates]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -421,6 +542,12 @@ export default function App() {
     fetchData();
   }, [fetchData]);
 
+  const openManga = (mangaObj) => {
+    setSelectedManga(mangaObj);
+    setSelectedChapter(null);
+    pushHistoryState({ selectedManga: mangaObj, selectedChapter: null });
+  };
+
   const handleTabChange = (newTab) => {
     setTab(newTab);
     setPage(1);
@@ -428,6 +555,7 @@ export default function App() {
     setSelectedManga(null);
     setSelectedChapter(null);
     if (newTab !== 'search') setShowFilters(false);
+    pushHistoryState({ tab: newTab, page: 1, selectedManga: null, selectedChapter: null });
   };
 
   const handleSearch = (e) => {
@@ -438,12 +566,15 @@ export default function App() {
     setManga([]);
     setSelectedManga(null);
     setSelectedChapter(null);
+    pushHistoryState({ tab: 'search', page: 1, activeQuery: searchQuery, selectedManga: null, selectedChapter: null });
   };
 
   const handleFilterApply = () => {
-    setActiveFilters({ ...filters });
+    const newActiveFilters = { ...filters };
+    setActiveFilters(newActiveFilters);
     setPage(1);
     setManga([]);
+    pushHistoryState({ tab: 'search', page: 1, activeFilters: newActiveFilters, selectedManga: null, selectedChapter: null });
     fetchData();
   };
 
@@ -456,7 +587,9 @@ export default function App() {
   };
 
   const handleChapterPlay = (chapter, mangaObj, allChapters) => {
-    setSelectedChapter({ ...chapter, mangaTitle: mangaObj?.title || selectedManga?.title || 'Đọc Truyện', allChapters });
+    const nextChapter = { ...chapter, mangaTitle: mangaObj?.title || selectedManga?.title || 'Đọc Truyện', allChapters };
+    setSelectedChapter(nextChapter);
+    pushHistoryState({ selectedChapter: nextChapter, selectedManga: mangaObj ?? selectedManga });
   };
 
   const tabLabel = {
@@ -490,14 +623,19 @@ export default function App() {
     setManga([]);
     setSelectedManga(null);
     setSelectedChapter(null);
+    pushHistoryState({ tab: 'search', page: 1, activeQuery: '', genreStates: { [genre.id]: 'include' }, selectedManga: null, selectedChapter: null });
   };
 
   if (selectedChapter) {
     return (
       <MangaReaderScreen
         chapterInfo={selectedChapter}
-        onBack={() => setSelectedChapter(null)}
-        onChapterSelect={(ch) => setSelectedChapter({ ...selectedChapter, url: ch.url, name: ch.name || ch.title })}
+        onBack={() => window.history.back()}
+        onChapterSelect={(ch) => {
+          const nextChapter = { ...selectedChapter, url: ch.url, name: ch.name || ch.title };
+          setSelectedChapter(nextChapter);
+          pushHistoryState({ selectedChapter: nextChapter });
+        }}
       />
     );
   }
@@ -555,7 +693,7 @@ export default function App() {
                 ) : (
                   searchSuggestions.map((m, i) => (
                     <div key={i} className="search-dropdown-item" onClick={() => {
-                        setSelectedManga({ url: m.url, title: m.title, thumbnail_url: m.thumbnail_url });
+                        openManga({ url: m.url, title: m.title, thumbnail_url: m.thumbnail_url });
                         setSearchQuery('');
                         setShowSuggestions(false);
                     }}>
@@ -584,7 +722,7 @@ export default function App() {
       {/* MAIN */}
       <main className="main">
         {selectedManga ? (
-          <MangaDetailScreen manga={selectedManga} onBack={() => setSelectedManga(null)} onChapterPlay={handleChapterPlay} />
+          <MangaDetailScreen manga={selectedManga} onBack={() => window.history.back()} onChapterPlay={handleChapterPlay} />
         ) : (
           <>
             {/* Quick genres bar */}
@@ -652,7 +790,7 @@ export default function App() {
               {loading
                 ? Array.from({ length: 18 }).map((_, i) => <SkeletonCard key={i} />)
                 : manga.map((m, i) => (
-                  <MangaCard key={m.url + i} manga={m} onClick={setSelectedManga} index={i} />
+                  <MangaCard key={m.url + i} manga={m} onClick={openManga} index={i} />
                 ))
               }
             </div>

@@ -5,9 +5,16 @@ const BASE_URL = 'https://truyenqqno.com';
 
 // Trong dev: /proxy/path -> Node.js proxy -> truyenqqno.com/path (không bị CORS)
 const fetchPage = async (url) => {
-  // Chuyển URL tuyệt đối thành đường dẫn tương đối qua proxy
-  const path = url.replace(BASE_URL, '');
-  const proxyUrl = `/proxy${path}`;
+  let proxyUrl = url;
+
+  // Nếu đã là proxy nội bộ thì dùng luôn
+  if (!proxyUrl.startsWith('/proxy')) {
+    if (proxyUrl.startsWith(BASE_URL)) {
+      proxyUrl = proxyUrl.slice(BASE_URL.length);
+    }
+    if (!proxyUrl.startsWith('/')) proxyUrl = `/${proxyUrl}`;
+    proxyUrl = `/proxy${proxyUrl}`;
+  }
 
   const response = await fetch(proxyUrl, {
     headers: {

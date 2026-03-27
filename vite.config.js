@@ -8,20 +8,43 @@ const BASE_URL = 'https://truyenqqno.com'
 let _browser = null
 let _context = null
 
+const { exec } = await import('node:child_process')
+const { promisify } = await import('node:util')
+const execAsync = promisify(exec)
+
 const getBrowserContext = async () => {
   if (_context) return _context
 
   const { chromium } = await import('playwright')
 
   console.log('[proxy] Khởi động trình duyệt Chromium để bypass Cloudflare...')
-  _browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-    ],
-  })
+  try {
+    _browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
+    })
+  } catch (launchError) {
+    console.warn('[proxy] chromium.launch thất bại:', launchError.message)
+    if (launchError.message && launchError.message.includes("Executable doesn't exist")) {
+      console.log('[proxy] Đang cài Playwright Chromium...')
+      await execAsync('npx playwright install chromium', { cwd: process.cwd(), shell: true })
+      console.log('[proxy] Cài xong, thử khởi động lại Chromium...')
+      _browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+        ],
+      })
+    } else {
+      throw launchError
+    }
+  }
 
   _context = await _browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -52,30 +75,38 @@ const fetchWithBrowser = async (url, options = {}) => {
   const page = await ctx.newPage()
   try {
     if (options.method === 'POST' && options.body) {
-      // Dùng route intercept để inject POST request
-      let result = null
-      await page.route('**/*', async (route) => {
-        if (route.request().url() === url) {
-          await route.continue()
-        } else {
-          await route.continue()
-        }
+      // POST request dùng Playwright request context thay vì page.evaluate để tránh CORS/JS fetch failure
+      const requestContext = ctx.request
+      const response = await requestContext.post(url, {
+        data: options.body,
+        headers: {
+          'Content-Type': options.contentType || 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': `${BASE_URL}/`,
+        },
+        timeout: 60000,
       })
-      // Với POST, dùng fetch API trong browser context
-      result = await page.evaluate(async ({ url, body, contentType }) => {
-        const resp = await fetch(url, {
-          method: 'POST',
-          body,
-          headers: { 'Content-Type': contentType, 'X-Requested-With': 'XMLHttpRequest' },
-        })
-        return { status: resp.status, text: await resp.text() }
-      }, { url, body: options.body.toString(), contentType: options.contentType || 'application/x-www-form-urlencoded' })
-      return result
+      const text = await response.text()
+      return { status: response.status(), text }
     } else {
       // GET request bình thường
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      const status = response?.status() || 200
-      const text = await page.content()
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+      if (!response) {
+        throw new Error('No response from target URL')
+      }
+      const status = response.status()
+      let text = ''
+      try {
+        if (status >= 500) {
+          // Thử lấy body trực tiếp từ response khi lỗi server
+          text = await response.text()
+        } else {
+          text = await page.content()
+        }
+      } catch (e) {
+        console.warn('[proxy] Không thể lấy nội dung page.content() hoặc response.text():', e.message)
+      }
       return { status, text }
     }
   } finally {
@@ -183,8 +214,9 @@ export default defineConfig({
               contentType,
             })
             console.log(`[proxy] ${method} ${path} -> ${result.status}`)
+            const body = result.text || ''
             res.writeHead(result.status, { 'Content-Type': 'text/html;charset=utf-8' })
-            res.end(result.text)
+            res.end(body)
           } catch (err) {
             console.error(`[proxy] Lỗi khi fetch ${targetUrl}:`, err.message)
             res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
