@@ -163,12 +163,14 @@ export default defineConfig({
           }
 
           try {
+            // Lấy source URL từ header X-Source-URL
+            const sourceUrl = req.headers['x-source-url'] || BASE_URL
             const client = await getAxiosClient()
             const response = await client.get(urlParam, {
               responseType: 'arraybuffer',
               headers: {
                 'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-                'Referer': `${BASE_URL}/`,
+                'Referer': `${sourceUrl}/`,
               },
             })
             const ct = response.headers['content-type'] || 'image/jpeg'
@@ -190,8 +192,13 @@ export default defineConfig({
           if (!req.url?.startsWith('/proxy')) return next()
 
           const path = req.url.slice('/proxy'.length) || '/'
-          const targetUrl = `${BASE_URL}${path}`
+          // Lấy source URL từ header X-Source-URL (gửi bởi client api.js)
+          // Nếu không có, dùng BASE_URL mặc định
+          const sourceUrl = req.headers['x-source-url'] || BASE_URL
+          const targetUrl = `${sourceUrl}${path}`
           const method = req.method || 'GET'
+          
+          console.log(`[proxy-debug] Header X-Source-URL: ${req.headers['x-source-url']}, Using: ${sourceUrl}`)
 
           // Đọc body nếu là POST
           let requestBody = null

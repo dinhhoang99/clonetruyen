@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import './index.css';
+import './styles/App.css';
 import {
   getPopularManga, getLatestUpdates, searchManga, getMangaDetails, getChapterImages, getSearchSuggestions, getMangaByGenre,
-  COUNTRIES, STATUSES, CHAPTER_COUNTS, SORT_OPTIONS, GENRES, toImgProxy
+  COUNTRIES, STATUSES, CHAPTER_COUNTS, SORT_OPTIONS, GENRES, toImgProxy, setCurrentSource, getSourcesList, getSourceConfig
 } from './api';
 
 // Router tĩnh (History API) + cache để trở về không gọi lại API.
@@ -97,7 +97,7 @@ const HorizontalScrollSection = ({ title, manga, loading, onMangaClick, onViewAl
 );
 
 // ===== HOME PAGE =====
-const HomePage = ({ onMangaClick }) => {
+const HomePage = ({ onMangaClick, source }) => {
   const [popularManga, setPopularManga] = useState([]);
   const [latestManga, setLatestManga] = useState([]);
   const [latestPage, setLatestPage] = useState(1);
@@ -110,32 +110,45 @@ const HomePage = ({ onMangaClick }) => {
 
   useEffect(() => {
     const loadHomeData = async () => {
-      // Load popular manga
-      if (pageDataCache.popular.has('popular|1')) {
-        setPopularManga(pageDataCache.popular.get('popular|1').manga.slice(0, 12));
+      // Reset states and force reload when source changes
+      console.log(`🏠 HomePage: Loading popular for source=${source}`);
+      setPopularManga([]);
+      setLatestManga([]);
+      setLatestPage(1);
+      setPageWindowStart(1);
+      setHasNextLatestPage(true);
+      
+      // Load popular manga - include source in cache key
+      const cacheKey = `${source}|popular|1`;
+      try {
+        setLoading(prev => ({ ...prev, popular: true }));
+        console.log(`📍 HomePage: Fetching popular...`);
+        const result = await getPopularManga(1);
+        pageDataCache.popular.set(cacheKey, result);
+        console.log(`✅ HomePage: Got ${result.manga.length} popular items`);
+        setPopularManga(result.manga.slice(0, 12));
+      } catch (e) {
+        console.error('❌ HomePage Error loading popular manga:', e);
+      } finally {
         setLoading(prev => ({ ...prev, popular: false }));
-      } else {
-        try {
-          const result = await getPopularManga(1);
-          pageDataCache.popular.set('popular|1', result);
-          setPopularManga(result.manga.slice(0, 12));
-        } catch (e) {
-          console.error('Error loading popular manga:', e);
-        } finally {
-          setLoading(prev => ({ ...prev, popular: false }));
-        }
       }
     };
 
     loadHomeData();
-  }, []);
+  }, [source]);
 
   useEffect(() => {
     const loadLatest = async () => {
+      console.log(`🏠 HomePage: Loading latest for source=${source}, page=${latestPage}`);
       setLoading(prev => ({ ...prev, latest: true }));
-      const cacheKey = `latest|${latestPage}`;
-      if (pageDataCache.latest.has(cacheKey)) {
+      // Include source in cache key
+      const cacheKey = `${source}|latest|${latestPage}`;
+      
+      // Skip cache when source changes (cache was cleared)
+      // Only use cache on same source for pagination
+      if (pageDataCache.latest.has(cacheKey) && latestPage !== 1) {
         const cached = pageDataCache.latest.get(cacheKey);
+        console.log(`✅ HomePage: Using cached data`);
         setLatestManga(cached.manga.slice(0, 35));
         setHasNextLatestPage(cached.hasNextPage || false);
         setLoading(prev => ({ ...prev, latest: false }));
@@ -143,12 +156,14 @@ const HomePage = ({ onMangaClick }) => {
       }
 
       try {
+        console.log(`📍 HomePage: Fetching latest...`);
         const result = await getLatestUpdates(latestPage);
         pageDataCache.latest.set(cacheKey, result);
+        console.log(`✅ HomePage: Got ${result.manga.length} latest items`);
         setLatestManga(result.manga.slice(0, 35));
         setHasNextLatestPage(result.hasNextPage || false);
       } catch (e) {
-        console.error('Error loading latest manga:', e);
+        console.error('❌ HomePage Error loading latest manga:', e);
       } finally {
         setLoading(prev => ({ ...prev, latest: false }));
       }
@@ -162,7 +177,7 @@ const HomePage = ({ onMangaClick }) => {
     }
 
     loadLatest();
-  }, [latestPage]);
+  }, [latestPage, source]);
 
   return (
     <div className="home-page">
@@ -260,8 +275,8 @@ const MangaCard = ({ manga, onClick, index }) => {
       <div className="manga-card-img">
         {isNew && <span className="status-badge status-new">Mới</span>}
         {isHot && <span className="status-badge status-hot">🔥 Hot</span>}
-        {manga.date && (
-          <span className="manga-card-date">{manga.date}</span>
+        {manga.time_ago && (
+          <span className="manga-card-date">{manga.time_ago}</span>
         )}
         <img
           src={manga.thumbnail_url ? toImgProxy(manga.thumbnail_url) : 'https://placehold.co/200x300/1a1a2e/6c63ff?text=No+Cover'}
@@ -276,9 +291,9 @@ const MangaCard = ({ manga, onClick, index }) => {
       </div>
       <div className="manga-card-info">
         <div className="manga-card-title">{manga.title}</div>
-        {manga.lastChapter && (
+        {manga.last_chapter && (
           <div className="manga-card-chapters">
-            📖 {manga.lastChapter}
+            📖 {manga.last_chapter}
           </div>
         )}
       </div>
@@ -287,7 +302,7 @@ const MangaCard = ({ manga, onClick, index }) => {
 };
 
 // ===== MANGA READER SCREEN =====
-const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect }) => {
+const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect, source = 'truyenqq' }) => {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -303,7 +318,8 @@ const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect }) => {
       setError(null);
       setImages([]);
 
-      const cacheKey = chapterInfo.url;
+      // Include source in cache key
+      const cacheKey = `${source}|${chapterInfo.url}`;
       if (chapterImageCache.has(cacheKey)) {
         setImages(chapterImageCache.get(cacheKey));
         setLoading(false);
@@ -329,7 +345,7 @@ const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect }) => {
     return () => {
       active = false;
     };
-  }, [chapterInfo?.url]);
+  }, [chapterInfo?.url, source]);
 
   const chapterList = chapterInfo.allChapters || [];
   let currentIndex = chapterList.findIndex(c => c.url === chapterInfo.url);
@@ -406,7 +422,7 @@ const MangaReaderScreen = ({ chapterInfo, onBack, onChapterSelect }) => {
 };
 
 // ===== MANGA DETAIL SCREEN =====
-const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
+const MangaDetailScreen = ({ manga, onBack, onChapterPlay, source = 'truyenqq' }) => {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -418,7 +434,8 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    const cacheKey = manga.url;
+    // Include source in cache key
+    const cacheKey = `${source}|${manga.url}`;
     if (mangaDetailCache.has(cacheKey)) {
       setDetail(mangaDetailCache.get(cacheKey));
       setLoading(false);
@@ -448,7 +465,7 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
     return () => {
       active = false;
     };
-  }, [manga]);
+  }, [manga, source]);
 
   if (!manga) return null;
 
@@ -736,14 +753,16 @@ export default function App() {
   }, [searchQuery]);
 
   const fetchData = useCallback(async () => {
+    console.log(`🔄 fetchData called for tab=${tab}, page=${page}, source=${source}`);
     setLoading(true);
     setError(null);
 
-    // Check cache first
-    const cacheKey = tab.startsWith('genre-') ? `${tab}|${page}` : `${tab}|${page}|${activeQuery}|${JSON.stringify(activeFilters)}|${JSON.stringify(genreStates)}`;
+    // Check cache first - include source in cache key
+    const cacheKey = tab.startsWith('genre-') ? `${source}|${tab}|${page}` : `${source}|${tab}|${page}|${activeQuery}|${JSON.stringify(activeFilters)}|${JSON.stringify(genreStates)}`;
     const cacheType = tab.startsWith('genre-') ? 'genre' : tab;
     if (pageDataCache[cacheType]?.has(cacheKey)) {
       const cached = pageDataCache[cacheType].get(cacheKey);
+      console.log(`✅ Using cached data for ${cacheType}`);
       setManga(cached.manga);
       setHasNextPage(cached.hasNextPage);
       setLoading(false);
@@ -751,6 +770,7 @@ export default function App() {
     }
 
     try {
+      console.log(`📍 Fetching new data for tab=${tab}, source=${source}`);
       let result;
       if (tab === 'popular') {
         result = await getPopularManga(page);
@@ -775,14 +795,16 @@ export default function App() {
         pageDataCache[cacheType].set(cacheKey, result);
       }
 
+      console.log(`✅ Fetched ${result.manga.length} items`);
       setManga(result.manga);
       setHasNextPage(result.hasNextPage);
     } catch (e) {
+      console.error(`❌ Error in fetchData:`, e);
       setError(e.message || 'Không thể tải dữ liệu. Có thể do CORS hoặc website nguồn đang bảo trì.');
     } finally {
       setLoading(false);
     }
-  }, [tab, page, activeQuery, activeFilters, genreStates]);
+  }, [tab, page, activeQuery, activeFilters, genreStates, source]);
 
   useEffect(() => {
     fetchData();
@@ -895,6 +917,7 @@ export default function App() {
           setSelectedChapter(nextChapter);
           pushHistoryState({ selectedChapter: nextChapter });
         }}
+        source={source}
       />
     );
   }
@@ -946,6 +969,50 @@ export default function App() {
               </div>
             )}
           </form>
+
+          <div className="source-selector">
+            <select
+              className="source-dropdown"
+              value={source}
+              onChange={(e) => {
+                const selectedSource = e.target.value;
+                console.log(`🔄 User selecting source: ${selectedSource}`);
+                
+                // Clear cache BEFORE changing source
+                pageDataCache.popular.clear();
+                pageDataCache.latest.clear();
+                pageDataCache.search.clear();
+                pageDataCache.genre.clear();
+                mangaDetailCache.clear();
+                chapterImageCache.clear();
+                
+                // Set current source trong API FIRST
+                setCurrentSource(selectedSource);
+                
+                // THEN update React state - this will trigger useEffect
+                setSource(selectedSource);
+                
+                // Reset states
+                setTab('popular');
+                setPage(1);
+                setManga([]);
+                setSelectedManga(null);
+                setSelectedChapter(null);
+                setSearchQuery('');
+                setActiveQuery('');
+                setShowFilters(false);
+                setActiveFilters({ country: '0', status: '-1', minchapter: '0', sort: '4' });
+                setGenreStates({});
+                
+                const config = getSourceConfig(selectedSource);
+                console.log(`✓ Đã chuyển sang nguồn: ${config.name}`);
+              }}
+            >
+              {getSourcesList().map(src => (
+                <option key={src.id} value={src.id}>{src.name}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </header>
 
@@ -960,11 +1027,12 @@ export default function App() {
               setSelectedChapter(nextChapter);
               pushHistoryState({ selectedChapter: nextChapter });
             }}
+            source={source}
           />
         ) : selectedManga ? (
-          <MangaDetailScreen manga={selectedManga} onBack={() => window.history.back()} onChapterPlay={handleChapterPlay} />
+          <MangaDetailScreen manga={selectedManga} onBack={() => window.history.back()} onChapterPlay={handleChapterPlay} source={source} />
         ) : (
-          <HomePage onMangaClick={openManga} />
+          <HomePage onMangaClick={openManga} source={source} />
         )}
       </main>
 
