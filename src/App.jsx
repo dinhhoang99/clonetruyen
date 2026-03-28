@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import './index.css';
 import {
-  getPopularManga, getLatestUpdates, searchManga, getMangaDetails, getChapterImages, getSearchSuggestions,
+  getPopularManga, getLatestUpdates, searchManga, getMangaDetails, getChapterImages, getSearchSuggestions, getMangaByGenre,
   COUNTRIES, STATUSES, CHAPTER_COUNTS, SORT_OPTIONS, GENRES, toImgProxy
 } from './api';
 
@@ -30,20 +30,226 @@ const pageDataCache = {
   popular: new Map(),
   latest: new Map(),
   search: new Map(),
+  genre: new Map(),
 };
 const mangaDetailCache = new Map();
 const chapterImageCache = new Map();
 
 
 
-// ===== SKELETON CARD =====
-const SkeletonCard = () => (
-  <div className="skeleton-card">
-    <div className="skeleton skeleton-img" />
-    <div className="skeleton skeleton-text" />
-    <div className="skeleton skeleton-text-sm" />
+// ===== MANGA CARD HORIZONTAL =====
+const MangaCardHorizontal = ({ manga, onClick }) => (
+  <div className="manga-card-horizontal" onClick={() => onClick(manga)}>
+    <div className="manga-card-horizontal-img">
+      <img
+        src={manga.thumbnail_url ? toImgProxy(manga.thumbnail_url) : 'https://placehold.co/150x200/1a1a2e/6c63ff?text=No+Cover'}
+        alt={manga.title}
+        loading="lazy"
+        onError={(e) => { e.target.src = 'https://placehold.co/150x200/1a1a2e/6c63ff?text=No+Cover'; }}
+      />
+    </div>
+    <div className="manga-card-horizontal-info">
+      <div className="manga-card-horizontal-title">{manga.title}</div>
+    </div>
   </div>
 );
+
+const SkeletonCard = () => (
+  <div className="manga-card">
+    <div className="manga-card-img">
+      <div style={{ width: '100%', height: '100%', background: 'rgba(255,255,255,0.08)' }} />
+    </div>
+    <div className="manga-card-info">
+      <div style={{ width: '80%', height: 14, background: 'rgba(255,255,255,0.08)', borderRadius: 4, margin: '8px 0' }} />
+      <div style={{ width: '60%', height: 12, background: 'rgba(255,255,255,0.06)', borderRadius: 4 }} />
+    </div>
+  </div>
+);
+
+// ===== HORIZONTAL SCROLL SECTION =====
+const HorizontalScrollSection = ({ title, manga, loading, onMangaClick, onViewAll }) => (
+  <section className="horizontal-section">
+    <div className="section-header-horizontal">
+      <h2 className="section-title-horizontal">{title}</h2>
+      {onViewAll && (
+        <button className="view-all-btn" onClick={onViewAll}>
+          Xem tất cả →
+        </button>
+      )}
+    </div>
+    <div className="horizontal-scroll-container">
+      <div className="horizontal-scroll-track">
+        {loading ? (
+          Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="skeleton-card-horizontal">
+              <div className="skeleton skeleton-img-horizontal" />
+              <div className="skeleton skeleton-text-horizontal" />
+            </div>
+          ))
+        ) : (
+          manga.map((m, i) => (
+            <MangaCardHorizontal key={m.url + i} manga={m} onClick={onMangaClick} />
+          ))
+        )}
+      </div>
+    </div>
+  </section>
+);
+
+// ===== HOME PAGE =====
+const HomePage = ({ onMangaClick }) => {
+  const [popularManga, setPopularManga] = useState([]);
+  const [latestManga, setLatestManga] = useState([]);
+  const [latestPage, setLatestPage] = useState(1);
+  const [pageWindowStart, setPageWindowStart] = useState(1);
+  const [hasNextLatestPage, setHasNextLatestPage] = useState(true);
+  const [loading, setLoading] = useState({
+    popular: true,
+    latest: true,
+  });
+
+  useEffect(() => {
+    const loadHomeData = async () => {
+      // Load popular manga
+      if (pageDataCache.popular.has('popular|1')) {
+        setPopularManga(pageDataCache.popular.get('popular|1').manga.slice(0, 12));
+        setLoading(prev => ({ ...prev, popular: false }));
+      } else {
+        try {
+          const result = await getPopularManga(1);
+          pageDataCache.popular.set('popular|1', result);
+          setPopularManga(result.manga.slice(0, 12));
+        } catch (e) {
+          console.error('Error loading popular manga:', e);
+        } finally {
+          setLoading(prev => ({ ...prev, popular: false }));
+        }
+      }
+    };
+
+    loadHomeData();
+  }, []);
+
+  useEffect(() => {
+    const loadLatest = async () => {
+      setLoading(prev => ({ ...prev, latest: true }));
+      const cacheKey = `latest|${latestPage}`;
+      if (pageDataCache.latest.has(cacheKey)) {
+        const cached = pageDataCache.latest.get(cacheKey);
+        setLatestManga(cached.manga.slice(0, 35));
+        setHasNextLatestPage(cached.hasNextPage || false);
+        setLoading(prev => ({ ...prev, latest: false }));
+        return;
+      }
+
+      try {
+        const result = await getLatestUpdates(latestPage);
+        pageDataCache.latest.set(cacheKey, result);
+        setLatestManga(result.manga.slice(0, 35));
+        setHasNextLatestPage(result.hasNextPage || false);
+      } catch (e) {
+        console.error('Error loading latest manga:', e);
+      } finally {
+        setLoading(prev => ({ ...prev, latest: false }));
+      }
+    };
+
+    // Adjust pageWindowStart when latestPage changes
+    if (latestPage < pageWindowStart) {
+      setPageWindowStart(Math.max(1, latestPage - 2));
+    } else if (latestPage > pageWindowStart + 4) {
+      setPageWindowStart(latestPage - 2);
+    }
+
+    loadLatest();
+  }, [latestPage]);
+
+  return (
+    <div className="home-page">
+      <HorizontalScrollSection
+        title="⭐ Truyện Hay"
+        manga={popularManga}
+        loading={loading.popular}
+        onMangaClick={onMangaClick}
+      />
+
+      <section className="grid-section">
+        <div className="section-header-horizontal">
+          <h2 className="section-title-horizontal">🔥 Truyện Mới</h2>
+        </div>
+        <div className="manga-grid manga-grid-home">
+          {loading.latest ? (
+            Array.from({ length: 35 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))
+          ) : (
+            latestManga.map((m, i) => (
+              <MangaCard key={m.url + i} manga={m} onClick={onMangaClick} index={i} />
+            ))
+          )}
+        </div>
+
+        <div className="pagination-controls pagination-center">
+          <button 
+            className="page-nav-btn" 
+            onClick={() => setLatestPage(1)}
+            disabled={latestPage === 1}
+            title="Trang đầu"
+          >
+            |&lt;
+          </button>
+          
+          <button 
+            className="page-nav-btn" 
+            onClick={() => setLatestPage(Math.max(1, latestPage - 1))}
+            disabled={latestPage === 1}
+            title="Trang trước"
+          >
+            &lt;
+          </button>
+
+          <div className="page-numbers">
+            {Array.from({ length: 5 }).map((_, i) => {
+              const pageNum = pageWindowStart + i;
+              return (
+                <button
+                  key={pageNum}
+                  className={`page-btn ${latestPage === pageNum ? 'active' : ''}`}
+                  onClick={() => setLatestPage(pageNum)}
+                  disabled={latestPage === pageNum}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+          </div>
+
+          <button 
+            className="page-nav-btn" 
+            onClick={() => setLatestPage(latestPage + 1)}
+            disabled={!hasNextLatestPage}
+            title="Trang sau"
+          >
+            &gt;
+          </button>
+
+          <button 
+            className="page-nav-btn" 
+            onClick={() => {
+              // Estimate last page based on hasNextPage
+              const estimatedLastPage = latestPage + (hasNextLatestPage ? 10 : 0);
+              setLatestPage(estimatedLastPage);
+            }}
+            disabled={!hasNextLatestPage}
+            title="Trang cuối"
+          >
+            &gt;|
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+};
 
 // ===== MANGA CARD =====
 const MangaCard = ({ manga, onClick, index }) => {
@@ -54,6 +260,9 @@ const MangaCard = ({ manga, onClick, index }) => {
       <div className="manga-card-img">
         {isNew && <span className="status-badge status-new">Mới</span>}
         {isHot && <span className="status-badge status-hot">🔥 Hot</span>}
+        {manga.date && (
+          <span className="manga-card-date">{manga.date}</span>
+        )}
         <img
           src={manga.thumbnail_url ? toImgProxy(manga.thumbnail_url) : 'https://placehold.co/200x300/1a1a2e/6c63ff?text=No+Cover'}
           alt={manga.title}
@@ -67,6 +276,11 @@ const MangaCard = ({ manga, onClick, index }) => {
       </div>
       <div className="manga-card-info">
         <div className="manga-card-title">{manga.title}</div>
+        {manga.lastChapter && (
+          <div className="manga-card-chapters">
+            📖 {manga.lastChapter}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -196,6 +410,7 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showFullDescription, setShowFullDescription] = useState(false);
 
   useEffect(() => {
     if (!manga) return;
@@ -311,7 +526,17 @@ const MangaDetailScreen = ({ manga, onBack, onChapterPlay }) => {
         {detail?.description && (
           <div className="detail-section">
             <h2 className="detail-section-label">Nội dung</h2>
-            <div className="detail-desc">{detail.description}</div>
+            <div className="detail-desc">
+              {showFullDescription ? detail.description : detail.description.slice(0, 300) + (detail.description.length > 300 ? '...' : '')}
+            </div>
+            {detail.description.length > 300 && (
+              <button
+                className="show-more-btn"
+                onClick={() => setShowFullDescription(!showFullDescription)}
+              >
+                {showFullDescription ? 'Ẩn bớt ↑' : 'Xem thêm ↓'}
+              </button>
+            )}
           </div>
         )}
 
@@ -513,12 +738,27 @@ export default function App() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    // Check cache first
+    const cacheKey = tab.startsWith('genre-') ? `${tab}|${page}` : `${tab}|${page}|${activeQuery}|${JSON.stringify(activeFilters)}|${JSON.stringify(genreStates)}`;
+    const cacheType = tab.startsWith('genre-') ? 'genre' : tab;
+    if (pageDataCache[cacheType]?.has(cacheKey)) {
+      const cached = pageDataCache[cacheType].get(cacheKey);
+      setManga(cached.manga);
+      setHasNextPage(cached.hasNextPage);
+      setLoading(false);
+      return;
+    }
+
     try {
       let result;
       if (tab === 'popular') {
         result = await getPopularManga(page);
       } else if (tab === 'latest') {
         result = await getLatestUpdates(page);
+      } else if (tab.startsWith('genre-')) {
+        const genreId = tab.split('-')[1];
+        result = await getMangaByGenre(genreId, page);
       } else {
         // Build genre filters
         const included = Object.entries(genreStates).filter(([, v]) => v === 'include').map(([id]) => id);
@@ -529,6 +769,12 @@ export default function App() {
           notcategory: excluded.join(','),
         });
       }
+
+      // Cache result
+      if (pageDataCache[cacheType]) {
+        pageDataCache[cacheType].set(cacheKey, result);
+      }
+
       setManga(result.manga);
       setHasNextPage(result.hasNextPage);
     } catch (e) {
@@ -556,6 +802,16 @@ export default function App() {
     setSelectedChapter(null);
     if (newTab !== 'search') setShowFilters(false);
     pushHistoryState({ tab: newTab, page: 1, selectedManga: null, selectedChapter: null });
+  };
+
+  const goToHome = () => {
+    setTab('popular');
+    setPage(1);
+    setManga([]);
+    setSelectedManga(null);
+    setSelectedChapter(null);
+    setShowFilters(false);
+    pushHistoryState({ tab: 'popular', page: 1, selectedManga: null, selectedChapter: null });
   };
 
   const handleSearch = (e) => {
@@ -598,6 +854,14 @@ export default function App() {
     search: '🔍 Tìm Kiếm & Lọc',
   };
 
+  // Dynamic genre tabs
+  const getGenreTabLabel = (tab) => {
+    if (!tab.startsWith('genre-')) return tabLabel[tab] || '📚 Danh sách truyện';
+    const genreId = tab.split('-')[1];
+    const genre = GENRES.find(g => g.id === genreId);
+    return genre ? `🎭 ${genre.name}` : '🎭 Thể Loại';
+  };
+
   const QUICK_GENRES = [
     { name: 'Action', id: '26' },
     { name: 'Romance', id: '36' },
@@ -612,18 +876,13 @@ export default function App() {
   ];
 
   const handleQuickGenre = (genre) => {
-    setTab('search');
-    setActiveQuery('');
-    setSearchQuery('');
-    setShowFilters(true);
-    setFilters({ country: '0', status: '-1', minchapter: '0', sort: '4' });
-    setActiveFilters({ country: '0', status: '-1', minchapter: '0', sort: '4' });
-    setGenreStates({ [genre.id]: 'include' });
+    const genreTab = `genre-${genre.id}`;
+    setTab(genreTab);
     setPage(1);
     setManga([]);
     setSelectedManga(null);
     setSelectedChapter(null);
-    pushHistoryState({ tab: 'search', page: 1, activeQuery: '', genreStates: { [genre.id]: 'include' }, selectedManga: null, selectedChapter: null });
+    pushHistoryState({ tab: genreTab, page: 1, selectedManga: null, selectedChapter: null });
   };
 
   if (selectedChapter) {
@@ -645,27 +904,9 @@ export default function App() {
       {/* HEADER */}
       <header className="header">
         <div className="header-inner">
-          <div className="logo" onClick={() => handleTabChange('popular')} style={{cursor: 'pointer'}}>
+          <div className="logo" onClick={goToHome} style={{cursor: 'pointer'}}>
             <div className="logo-icon">📚</div>
             <span className="logo-text">CloneTruyen</span>
-          </div>
-          
-          <div className="source-selector">
-            <select
-              className="source-dropdown"
-              value={source}
-              onChange={(e) => {
-                if (e.target.value !== 'truyenqq') {
-                  alert('Nguồn này đang trong quá trình phát triển, vui lòng quay lại sau!');
-                } else {
-                  setSource(e.target.value);
-                }
-              }}
-            >
-              <option value="truyenqq">TruyenQQ</option>
-              <option value="nettruyen">NetTruyen</option>
-              <option value="blogtruyen">BlogTruyen</option>
-            </select>
           </div>
 
           <form className="search-wrapper" onSubmit={handleSearch} style={{ position: 'relative' }}>
@@ -705,131 +946,25 @@ export default function App() {
               </div>
             )}
           </form>
-          <nav className="nav-tabs">
-            <button id="tab-popular" className={`nav-tab ${tab === 'popular' ? 'active' : ''}`} onClick={() => handleTabChange('popular')}>⭐ Phổ biến</button>
-            <button id="tab-latest" className={`nav-tab ${tab === 'latest' ? 'active' : ''}`} onClick={() => handleTabChange('latest')}>🔥 Mới nhất</button>
-            <button
-              id="tab-filter"
-              className={`nav-tab ${tab === 'search' && !activeQuery ? 'active' : ''}`}
-              onClick={() => { handleTabChange('search'); setShowFilters(true); setActiveQuery(''); }}
-            >
-              🎛️ Bộ lọc
-            </button>
-          </nav>
         </div>
       </header>
 
       {/* MAIN */}
       <main className="main">
-        {selectedManga ? (
+        {selectedChapter ? (
+          <MangaReaderScreen
+            chapterInfo={selectedChapter}
+            onBack={() => window.history.back()}
+            onChapterSelect={(ch) => {
+              const nextChapter = { ...selectedChapter, url: ch.url, name: ch.name || ch.title };
+              setSelectedChapter(nextChapter);
+              pushHistoryState({ selectedChapter: nextChapter });
+            }}
+          />
+        ) : selectedManga ? (
           <MangaDetailScreen manga={selectedManga} onBack={() => window.history.back()} onChapterPlay={handleChapterPlay} />
         ) : (
-          <>
-            {/* Quick genres bar */}
-            <div className="quick-genres-bar">
-              <span className="quick-genres-label">🏷️ Thể loại nhanh:</span>
-              <div className="quick-genres-scroll">
-                {QUICK_GENRES.map(g => (
-                  <button key={g.id} className="quick-genre-btn" onClick={() => handleQuickGenre(g)}>
-                    {g.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Section header */}
-            <div className="section-header">
-              <h1 className="section-title">
-                {tabLabel[tab] || '📚 Danh sách truyện'}
-                <span className="badge">{manga.length > 0 ? `${manga.length} truyện` : ''}</span>
-              </h1>
-              {tab === 'search' && (
-                <button
-                  className="filter-btn"
-                  style={{ fontSize: 13 }}
-                  onClick={() => setShowFilters(v => !v)}
-                >
-                  {showFilters ? 'Ẩn bộ lọc ▲' : 'Bộ lọc nâng cao ▼'}
-                </button>
-              )}
-            </div>
-
-            {/* Filters (only in search mode) */}
-            {tab === 'search' && showFilters && (
-              <>
-                <FilterBar
-                  filters={filters}
-                  onChange={(key, val) => setFilters(prev => ({ ...prev, [key]: val }))}
-                  onApply={handleFilterApply}
-                />
-                <GenrePicker genreStates={genreStates} onToggle={handleGenreToggle} />
-              </>
-            )}
-
-            {/* Error state */}
-            {error && !loading && (
-              <div className="state-box">
-                <div className="state-icon">😢</div>
-                <div className="state-title">Không thể tải dữ liệu</div>
-                <div className="state-msg">{error}</div>
-                <button className="retry-btn" onClick={fetchData}>Thử lại</button>
-              </div>
-            )}
-
-            {/* Empty state */}
-            {!loading && !error && manga.length === 0 && (
-              <div className="state-box">
-                <div className="state-icon">🔍</div>
-                <div className="state-title">Không tìm thấy kết quả</div>
-                <div className="state-msg">Thử tìm kiếm với từ khóa khác hoặc thay đổi bộ lọc.</div>
-              </div>
-            )}
-
-            {/* Grid */}
-            <div className="manga-grid">
-              {loading
-                ? Array.from({ length: 18 }).map((_, i) => <SkeletonCard key={i} />)
-                : manga.map((m, i) => (
-                  <MangaCard key={m.url + i} manga={m} onClick={openManga} index={i} />
-                ))
-              }
-            </div>
-
-            {/* Pagination */}
-            {!loading && !error && manga.length > 0 && (
-              <div className="pagination">
-                <button
-                  id="btn-prev"
-                  className="page-btn"
-                  disabled={page <= 1}
-                  onClick={() => { setPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                >
-                  ← Trước
-                </button>
-                {[...Array(Math.min(5, page + 2))].map((_, i) => {
-                  const p = Math.max(1, page - 2) + i;
-                  if (p > page + 2) return null;
-                  return (
-                    <button
-                      key={p}
-                      className={`page-btn ${p === page ? 'active' : ''}`}
-                      onClick={() => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                    >
-                      {p}
-                    </button>
-                  );
-                })}
-                <button
-                  id="btn-next"
-                  className="page-btn"
-                  disabled={!hasNextPage}
-                  onClick={() => { setPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                >
-                  Tiếp →
-                </button>
-              </div>
-            )}
-          </>
+          <HomePage onMangaClick={openManga} />
         )}
       </main>
 

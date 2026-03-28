@@ -51,14 +51,37 @@ export const toImgProxy = (url) => {
 const mangaFromElement = (li) => {
   const anchor = li.querySelector('.book_info .qtip a');
   const img = li.querySelector('.book_avatar img');
+  
+  // Tìm date: có thể ở nhiều nơi
+  let dateEl = li.querySelector('.time-chap');
+  if (!dateEl) dateEl = li.querySelector('span.time, .time, time, .date');
+  if (!dateEl) {
+    const allText = li.textContent;
+    const dateMatch = allText.match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{1,2}-\d{1,2}(?:-\d{2,4})?|hôm nay|hôm qua|[\d\sngày tháng]/);
+    if (dateMatch) console.log('Date from regex:', dateMatch[0], 'for:', anchor?.textContent.trim());
+  }
+  
+  // Tìm chapter: thường là strong, chap-num, last-chapter
+  let chapEl = li.querySelector('.last-chapter');
+  if (!chapEl) chapEl = li.querySelector('strong');
+  if (!chapEl) chapEl = li.querySelector('span.chap-num, .chap-num, .chapter-name');
+  if (!chapEl) {
+    const allSpans = [...li.querySelectorAll('span, strong, a')];
+    chapEl = allSpans.find(el => el.textContent.includes('Chương') || el.textContent.includes('chap'));
+  }
+  
   if (!anchor) return null;
+  
   const href = anchor.getAttribute('href') || '';
   const url = href.startsWith('http') ? href : BASE_URL + href;
   const rawSrc = img?.getAttribute('src') || img?.getAttribute('data-src') || '';
+  
   return {
     url,
     title: anchor.textContent.trim(),
     thumbnail_url: resolveImgUrl(rawSrc),
+    date: dateEl?.textContent.trim() || '',
+    lastChapter: chapEl?.textContent.trim() || '',
     slug: href,
   };
 };
@@ -106,6 +129,11 @@ export const searchManga = async (page = 1, query = '', filters = {}) => {
   return { manga, hasNextPage: parseHasNextPage(doc) };
 };
 
+// === GET MANGA BY GENRE ===
+export const getMangaByGenre = async (genreId, page = 1) => {
+  return await searchManga(page, '', { category: genreId, sort: '4' }); // sort=4 là theo view
+};
+
 // === AUTO SUGGEST SEARCH ===
 export const getSearchSuggestions = async (query) => {
   const formData = new URLSearchParams();
@@ -137,14 +165,32 @@ export const getSearchSuggestions = async (query) => {
   return lis.map(li => {
     const a = li.querySelector('a');
     if (!a) return null;
+    
     const img = li.querySelector('img');
     const titleEl = li.querySelector('h3, .name, strong, .title') || a;
+    
+    // Tìm date
+    let dateEl = li.querySelector('.time-chap');
+    if (!dateEl) dateEl = li.querySelector('span.time, .time, time, .date');
+    
+    // Tìm chapter
+    let chapEl = li.querySelector('.last-chapter');
+    if (!chapEl) chapEl = li.querySelector('strong');
+    if (!chapEl) chapEl = li.querySelector('span.chap-num, .chap-num, .chapter-name');
+    if (!chapEl) {
+      const allSpans = [...li.querySelectorAll('span, strong, a')];
+      chapEl = allSpans.find(el => el.textContent.includes('Chương') || el.textContent.includes('chap'));
+    }
+    
     const href = a.getAttribute('href') || '';
     const rawSrc = img?.getAttribute('src') || img?.getAttribute('data-src') || img?.getAttribute('data-original') || '';
+    
     return {
       url: href.startsWith('http') ? href : BASE_URL + href,
       title: titleEl.textContent.trim(),
       thumbnail_url: resolveImgUrl(rawSrc),
+      date: dateEl?.textContent.trim() || '',
+      lastChapter: chapEl?.textContent.trim() || '',
     };
   }).filter(Boolean);
 };
